@@ -141,4 +141,30 @@ defmodule Req.Response do
       when is_binary(key) and is_binary(value) do
     %{response | headers: List.keystore(response.headers, key, 0, {key, value})}
   end
+
+  @doc """
+  Removes a header from a response
+
+  ## Examples
+      iex> response.headers
+      [
+        {"content-type", "text/plain"},
+        {"cache-control", "max-age=30"},
+        {"cache-control", "s-maxage=30"}
+      ]
+      iex> Req.Response.delete_header(response, "cache-control").headers
+      [{"content-type", "text/plain"}]
+
+  """
+  @spec delete_header(t(), binary()) :: t()
+  def delete_header(response, key) when is_binary(key) do
+    downcase_key = String.downcase(key)
+
+    headers =
+      for {header_name, header_value} <- response.headers,
+          String.downcase(header_name) != downcase_key,
+          do: {header_name, header_value}
+
+    %__MODULE__{response | headers: headers}
+  end
 end
