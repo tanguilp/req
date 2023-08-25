@@ -904,20 +904,44 @@ defmodule Req.Steps do
     if request.options[:raw] do
       {request, response}
     else
-      compression_algorithms = get_content_encoding_header(response.headers)
-      decompressed_body = decompress_body(response.body, compression_algorithms)
-      decompressed_content_length = decompressed_body |> byte_size() |> to_string()
+      response = decompress_rec(response)
 
-      response =
-        %Req.Response{response | body: decompressed_body}
-        |> Req.Response.put_header("content-length", decompressed_content_length)
+      decompressed_content_length = response.body |> byte_size() |> to_string()
+      response = Req.Response.put_header(response, "content-length", decompressed_content_length)
 
       {request, response}
     end
   end
 
-  defp decompress_body(body, algorithms) do
-    Enum.reduce(algorithms, body, &decompress_with_algorithm(&1, &2))
+  @known_content_encodings ~w|gzip x-gzip br zstd identity|
+
+  defp decompress_rec(response) do
+    content_encodings = get_content_encodings(response)
+    alg_to_decode = List.last(content_encodings)
+
+    if alg_to_decode in @known_content_encodings do
+      remaining_encodings = Enum.drop(content_encodings, -1)
+
+      response = %Req.Response{
+        response
+        | body: decompress_with_algorithm(alg_to_decode, response.body)
+      }
+
+      response =
+        case remaining_encodings do
+          [] ->
+            Req.Response.delete_header(response, "content-encoding")
+
+          _ ->
+            response
+            |> Req.Response.delete_header("content-encoding")
+            |> Req.Response.put_header("content-encoding", Enum.join(remaining_encodings, ", "))
+        end
+
+      decompress_rec(response)
+    else
+      response
+    end
   end
 
   defp decompress_with_algorithm(gzip, body) when gzip in ["gzip", "x-gzip"] do
@@ -942,10 +966,6 @@ defmodule Req.Steps do
   end
 
   defp decompress_with_algorithm("identity", body) do
-    body
-  end
-
-  defp decompress_with_algorithm(_algorithm, body) do
     body
   end
 
@@ -1513,19 +1533,12 @@ defmodule Req.Steps do
 
   ## Utilities
 
-  defp get_content_encoding_header(headers) do
-    headers
-    |> Enum.flat_map(fn {name, value} ->
-      if String.downcase(name) == "content-encoding" do
-        value
-        |> String.downcase()
-        |> String.split(",", trim: true)
-        |> Stream.map(&String.trim/1)
-      else
-        []
-      end
-    end)
-    |> Enum.reverse()
+  defp get_content_encodings(response) do
+    response
+    |> Req.Response.get_header("content-encoding")
+    |> Enum.map(&String.split(&1, ",", trim: true))
+    |> List.flatten()
+    |> Enum.map(&String.trim/1)
   end
 
   defp cache_path(cache_dir, request) do
